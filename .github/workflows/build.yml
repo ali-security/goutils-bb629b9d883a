@@ -1,0 +1,64 @@
+name: build
+
+on:
+  workflow_dispatch:
+
+jobs:
+  pack:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: src
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+          cache: false
+      - name: Build module zip
+        run: |
+          set -euo pipefail
+          # Pack from a copy of the tree without this build-only workflow dir
+          # (upstream ships no .github of its own).
+          mkdir -p tree out helper
+          cp -a src/. tree/
+          rm -rf tree/.git tree/.github
+          cat > helper/main.go <<'GO'
+          package main
+
+          import (
+                  "log"
+                  "os"
+
+                  "golang.org/x/mod/module"
+                  "golang.org/x/mod/zip"
+          )
+
+          func main() {
+                  m := module.Version{Path: os.Args[1], Version: os.Args[2]}
+                  f, err := os.Create(os.Args[4])
+                  if err != nil {
+                      log.Fatal(err)
+                  }
+                  defer f.Close()
+                  if err := zip.CreateFromDir(f, m, os.Args[3]); err != nil {
+                      log.Fatal(err)
+                  }
+                  log.Printf("created module zip: %s", os.Args[4])
+          }
+          GO
+          cd helper
+          go mod init example.com/helper
+          go get golang.org/x/mod@v0.14.0
+          go run . github.com/Masterminds/goutils v1.1.0 "$GITHUB_WORKSPACE/tree" "$GITHUB_WORKSPACE/out/v1.1.0.zip"
+          cd ..
+          unzip -l out/v1.1.0.zip
+      - name: Compile check
+        working-directory: src
+        env:
+          GO111MODULE: 'off'
+        run: go build .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: go-module-zip
+          path: out/v1.1.0.zip
